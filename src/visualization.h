@@ -40,21 +40,26 @@ typedef struct {
 } NodePos;
 
 typedef struct {
-    const Graph         *graph;
     const DijkstraResult *result;
-    NodePos             *positions;
     int                  src, dst;
-    AnimState   animState;
-    int         pathIdx;
-    float       edgeT;
-    float       edgeTimer;
-    float       pauseTimer;
-    int         totalEdgeSteps;
-    float       entityX, entityY;
-    bool        playing;
+    AnimState            animState;
+    int                  pathIdx;
+    float                edgeTimer;
+    float                pauseTimer;
+    int                  totalEdgeSteps;
+    float                entityX, entityY;
+    Color                color;
+} TravelerState;
+
+typedef struct {
+    const Graph      *graph;
+    NodePos          *positions;
+    TravelerState    *travelers;
+    int              numTravelers;
+    bool             playing;
 } VisContext;
 
-VisContext *visCreate(const Graph *g, const DijkstraResult *r, int src, int dst);
+VisContext *visCreate(const Graph *g, TravelerReq *reqs, DijkstraResult *results, int numTravelers);
 void        visUpdate(VisContext *ctx, float dt);
 void        visDraw(const VisContext *ctx);
 void        visFree(VisContext *ctx);

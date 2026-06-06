@@ -16,9 +16,14 @@ typedef struct {
     AdjNode *adjList;
 } Graph;
 
+typedef struct {
+    int src;
+    int dst;
+} TravelerReq;
+
 Graph* createGraph(int numVertices);
 void addEdge(Graph *g, int src, int dest, int weight);
 void freeGraph(Graph *g);
-Graph* readGraphFromFile(const char *filename, int *querySrc, int *queryDst);
+Graph* readGraphFromFile(const char *filename, TravelerReq **travelers, int *numTravelers);
 
 #endif

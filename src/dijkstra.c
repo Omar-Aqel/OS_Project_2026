@@ -12,6 +12,7 @@ static int minUnvisited(const int *dist, const int *visited, int N) {
 }
 
 static int *reconstructPath(const int *prev, int src, int dst, int N, int *pathLength) {
+    (void)src;  // unused parameter
     int count = 0, cur = dst;
     while (cur != -1) { count++; cur = prev[cur]; if (count > N) break; }
     int *path = (int *)malloc(sizeof(int) * count);

@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -Wall -Wextra -g
+CFLAGS  = -Wall -Wextra -g -Isrc
 SRC_DIR = src
 
 # Source files shared by all milestones
@@ -28,6 +28,14 @@ milestone2 milestone3: $(COMMON_SRC) $(SRC_DIR)/main.c $(SRC_DIR)/visualization.
 		$(SRC_DIR)/visualization.c \
 		-o sim \
 		$(RAYLIB_FLAGS)
+
+
+# ─────────────────────────────────────────────
+#  milestone4 — Multiple Travelers
+# ─────────────────────────────────────────────
+milestone4: $(COMMON_SRC) $(SRC_DIR)/main4.c $(SRC_DIR)/visualization.c
+	$(CC) $(CFLAGS) -DENABLE_GUI $(COMMON_SRC) $(SRC_DIR)/main4.c $(SRC_DIR)/visualization.c -o sim $(RAYLIB_FLAGS)
+
 
 # ─────────────────────────────────────────────
 #  Utility

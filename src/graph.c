@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "graph.h"
 
 Graph *createGraph(int numVertices) {
@@ -50,12 +51,13 @@ void freeGraph(Graph *g) {
     free(g);
 }
 
-Graph *readGraphFromFile(const char *filename, int *querySrc, int *queryDst) {
+Graph *readGraphFromFile(const char *filename, TravelerReq **travelers, int *numTravelers) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
         fprintf(stderr, "Error: cannot open file '%s'\n", filename);
         return NULL;
     }
+
     int N, M;
     if (fscanf(file, "%d %d", &N, &M) != 2) {
         fprintf(stderr, "Error: invalid file format on line 1\n");
@@ -67,8 +69,9 @@ Graph *readGraphFromFile(const char *filename, int *querySrc, int *queryDst) {
         fclose(file);
         return NULL;
     }
-    Graph *g = createGraph(N);
+   Graph *g = createGraph(N);
     if (g == NULL) { fclose(file); return NULL; }
+    
     for (int i = 0; i < M; i++) {
         int src, dest, weight;
         if (fscanf(file, "%d %d %d", &src, &dest, &weight) != 3) {
@@ -85,14 +88,38 @@ Graph *readGraphFromFile(const char *filename, int *querySrc, int *queryDst) {
         }
         addEdge(g, src, dest, weight);
     }
-    if (fscanf(file, "%d %d", querySrc, queryDst) != 2) {
-        fprintf(stderr, "Error: missing or invalid query on last line\n");
+    
+    // look for #travelers token
+    char buf[64];
+    if (fscanf(file, "%63s", buf) != 1) {
+        fprintf(stderr, "Error: missing travelers section\n");
         freeGraph(g); fclose(file); return NULL;
     }
-    if (*querySrc < 0 || *queryDst < 0 || *querySrc >= N || *queryDst >= N) {
-        fprintf(stderr, "Error: query vertex index out of range\n");
+    if (strcmp(buf, "#travelers") != 0) {
+        fprintf(stderr, "Error: expected '#travelers' section\n");
         freeGraph(g); fclose(file); return NULL;
     }
+
+    if (fscanf(file, "%d", numTravelers) != 1) {
+        fprintf(stderr, "Error: missing number of travelers\n");
+        freeGraph(g); fclose(file); return NULL;
+    }
+    if (*numTravelers < 0) { fprintf(stderr, "Error: invalid number of travelers\n"); freeGraph(g); fclose(file); return NULL; }
+
+    *travelers = (TravelerReq *)malloc(sizeof(TravelerReq) * (*numTravelers));
+    if (*travelers == NULL) { fprintf(stderr, "Error: memory allocation failed for travelers\n"); freeGraph(g); fclose(file); return NULL; }
+
+    for (int i = 0; i < *numTravelers; i++) {
+        if (fscanf(file, "%d %d", &(*travelers)[i].src, &(*travelers)[i].dst) != 2) {
+            fprintf(stderr, "Error: invalid traveler data at %d\n", i+1);
+            free(*travelers); freeGraph(g); fclose(file); return NULL;
+        }
+        if ((*travelers)[i].src < 0 || (*travelers)[i].dst < 0 || (*travelers)[i].src >= N || (*travelers)[i].dst >= N) {
+            fprintf(stderr, "Error: traveler vertex index out of range at %d\n", i+1);
+            free(*travelers); freeGraph(g); fclose(file); return NULL;
+        }
+    }
+
     fclose(file);
     return g;
 }
