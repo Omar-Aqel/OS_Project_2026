@@ -45,6 +45,13 @@ milestone5: $(COMMON_SRC) $(SRC_DIR)/main5.c
 
 
 # ─────────────────────────────────────────────
+#  milestone6 — Node-access synchronization
+# ─────────────────────────────────────────────
+milestone6: $(COMMON_SRC) $(SRC_DIR)/main6.c
+	$(CC) $(CFLAGS) -DENABLE_GUI $(COMMON_SRC) $(SRC_DIR)/main6.c -o sim $(RAYLIB_FLAGS)
+
+
+# ─────────────────────────────────────────────
 #  Utility
 # ─────────────────────────────────────────────
 clean:
