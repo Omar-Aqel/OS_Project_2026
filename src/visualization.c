@@ -226,7 +226,7 @@ void visDraw(const VisContext *ctx) {
     for (int i = 0; i < N; i++) {
         DrawCircle((int)p[i].x, (int)p[i].y, NODE_RADIUS, COL_NODE);
         DrawCircleLines((int)p[i].x, (int)p[i].y, NODE_RADIUS, COL_NODE_BORDER);
-        char label[8];
+        char label[16];
         snprintf(label, sizeof(label), "%d", i);
         int lw = MeasureText(label, 16);
         DrawText(label, (int)(p[i].x - lw / 2), (int)(p[i].y - 8), 16, COL_TEXT);
@@ -238,7 +238,7 @@ void visDraw(const VisContext *ctx) {
             DrawCircle((int)t->entityX, (int)t->entityY, 14, t->color);
             DrawCircleLines((int)t->entityX, (int)t->entityY, 14, WHITE);
 
-            char tLabel[8];
+            char tLabel[16];
             snprintf(tLabel, sizeof(tLabel), "T%d", i);
             int tw = MeasureText(tLabel, 10);
             DrawText(tLabel, (int)t->entityX - tw/2, (int)t->entityY - 5, 10, WHITE);
