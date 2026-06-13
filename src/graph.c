@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include "graph.h"
 
 Graph *createGraph(int numVertices) {
@@ -89,14 +90,39 @@ Graph *readGraphFromFile(const char *filename, TravelerReq **travelers, int *num
         addEdge(g, src, dest, weight);
     }
     
-    // look for #travelers token
-    char buf[64];
-    if (fscanf(file, "%63s", buf) != 1) {
-        fprintf(stderr, "Error: missing travelers section\n");
+    // Look for the travelers section. Accept any line that starts with '#'
+    // (e.g. "#travelers", "# travelers", "# graph definition"), and skip
+    // blank lines / comment lines robustly so the parser tolerates the
+    // documented file formats used across milestones.
+    char buf[256];
+    bool foundTravelers = false;
+    while (fscanf(file, "%255s", buf) == 1) {
+        if (buf[0] == '#') {
+            // A token that begins with '#'. It may be "#travelers" itself,
+            // or just "#" followed by the word "travelers" as a separate
+            // token. Consume the rest of this line and decide.
+            char rest[256] = {0};
+            // read the remainder of the current line (may be empty)
+            if (fgets(rest, sizeof(rest), file) == NULL) rest[0] = '\0';
+            // strip leading spaces from rest
+            char *r = rest;
+            while (*r == ' ' || *r == '\t') r++;
+            // "#travelers"  OR  "# travelers ..."
+            if (strstr(buf, "travelers") != NULL ||
+                strncmp(r, "travelers", 9) == 0) {
+                foundTravelers = true;
+                break;
+            }
+            // otherwise it is a comment line we ignore; keep scanning
+            continue;
+        }
+        // a non-comment, non-'#' token before the travelers section is
+        // unexpected here
+        fprintf(stderr, "Error: expected travelers section, got '%s'\n", buf);
         freeGraph(g); fclose(file); return NULL;
     }
-    if (strcmp(buf, "#travelers") != 0) {
-        fprintf(stderr, "Error: expected '#travelers' section\n");
+    if (!foundTravelers) {
+        fprintf(stderr, "Error: missing travelers section\n");
         freeGraph(g); fclose(file); return NULL;
     }
 

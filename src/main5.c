@@ -1,8 +1,24 @@
+/* ================================================================== *
+ *  Milestone 5 — IPC with anonymous pipes
+ *  --------------------------------------------------------------
+ *  THE BRAIN.  This file owns ALL operating-system logic:
+ *    - fork() one child per traveler,
+ *    - each child computes its OWN Dijkstra path,
+ *    - each child walks the path, sleeping weight*300ms per edge and
+ *      1000ms inside each node, reporting every step to the parent
+ *      through an anonymous pipe,
+ *    - the parent reads those messages (non-blocking) and translates
+ *      them into VisContext state.
+ *
+ *  It contains NO drawing code beyond the 3-line render call.  All
+ *  rendering lives in the unified visualization.c engine.
+ * ================================================================== */
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <math.h>
+#include <string.h>
+#include <time.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -11,363 +27,191 @@
 
 #ifdef ENABLE_GUI
 #include "raylib.h"
+#include "visualization.h"
 #endif
 
-/* ── IPC message (child → parent) ────────────────────── */
-typedef enum { MSG_ARRIVED, MSG_FINISHED } MsgType;
+/* ---- pipe message protocol (milestone 5) ------------------------- */
+typedef enum { MSG_ARRIVED, MSG_DEPARTED, MSG_FINISHED } MsgType;
 
 typedef struct {
+    int     traveler;   /* which traveler                 */
     MsgType type;
-    pid_t   pid;
-    int     currentNode;
-    int     nextNode;   /* -1 = DESTINATION */
-} IPCMsg;
+    int     node;       /* node arrived at / departed from */
+    int     next;       /* next node (or -1)               */
+} PipeMsg;
 
-/* ── Timing ───────────────────────────────────────────── */
-#define TRAVEL_USEC_PER_UNIT  300000u   /* 300 ms per weight unit  */
-#define NODE_PAUSE_USEC      1000000u   /* 1000 ms pause per node  */
-#define EDGE_STEP_SEC          0.30f    /* GUI animation: s/weight */
+#define EDGE_MS  900     /* ms per weight unit, matches renderer  */
+#define DWELL_MS 1000    /* ms dwell inside a node                */
 
-/* ── GUI layout ───────────────────────────────────────── */
-#define WIN_W       1100
-#define WIN_H        700
-#define TARGET_FPS    60
-#define NODE_RADIUS   22
+/* Sleep for an arbitrary number of milliseconds.  usleep() is unsafe
+   here because POSIX leaves it undefined for values >= 1,000,000 us
+   (i.e. >= 1 s), which a heavy edge (weight*300ms) easily exceeds.
+   nanosleep() has no such limit. */
+static void sleep_ms(long ms) {
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+}
 
-/* ── Per-traveler animation state (parent side) ───────── */
-typedef struct {
-    pid_t  pid;
-    int    src, dst;
-    int    fromNode, toNode;        /* current animation segment */
-    float  animTimer, animDuration;
-    float  x, y;                   /* screen position           */
-    bool   started, done, waited;
-#ifdef ENABLE_GUI
-    Color  color;
-#endif
-} M5Traveler;
-
-typedef struct { float x, y; } NodePos;
-
-/* ── Helpers ──────────────────────────────────────────── */
-static void computePositions(NodePos *pos, int N) {
-    float cx = WIN_W * 0.46f;
-    float cy = WIN_H * 0.50f;
-    float r  = (WIN_H < WIN_W ? WIN_H : WIN_W) * 0.36f;
-    for (int i = 0; i < N; i++) {
-        float a = (2.0f * 3.14159265f * i) / N - 3.14159265f / 2.0f;
-        pos[i].x = cx + r * cosf(a);
-        pos[i].y = cy + r * sinf(a);
+/* ------------------------------------------------------------------ *
+ *  Child process body: walk the path, narrate over the pipe.
+ * ------------------------------------------------------------------ */
+static void childRun(int id, const DijkstraResult *res,
+                     const Graph *g, int writeFd) {
+    if (!res->found || res->pathLength < 1) {
+        PipeMsg m = { id, MSG_FINISHED, -1, -1 };
+        write(writeFd, &m, sizeof(m));
+        _exit(0);
     }
-}
 
-static int edgeWeight(const Graph *g, int u, int v) {
-    for (Edge *e = g->adjList[u].head; e; e = e->next)
-        if (e->dest == v) return e->weight;
-    return 1;
-}
+    for (int i = 0; i < res->pathLength; i++) {
+        int node = res->path[i];
+        int next = (i + 1 < res->pathLength) ? res->path[i + 1] : -1;
 
-/* ── GUI drawing ──────────────────────────────────────── */
-#ifdef ENABLE_GUI
-static const Color PALETTE[] = {
-    {255, 210,  60, 255},
-    { 50, 205,  50, 255},
-    {255, 140,   0, 255},
-    {255,   0, 255, 255},
-    {  0, 255, 255, 255},
-    {255, 255,   0, 255},
-    {255, 182, 193, 255},
-    {  0, 250, 154, 255},
-    {135, 206, 235, 255},
-    {238, 130, 238, 255},
-};
+        PipeMsg arr = { id, MSG_ARRIVED, node, next };
+        write(writeFd, &arr, sizeof(arr));
+        printf("[traveler %d | pid %d] arrived at node %d | next node: %d\n",
+               id, getpid(), node, next);
+        fflush(stdout);
 
-static void drawArrow(float x1, float y1, float x2, float y2, Color col) {
-    float dx = x2 - x1, dy = y2 - y1;
-    float len = sqrtf(dx*dx + dy*dy);
-    if (len < 1.0f) return;
-    float nx = dx/len, ny = dy/len;
-    float sx = x1 + nx*(NODE_RADIUS+4), sy = y1 + ny*(NODE_RADIUS+4);
-    float ex = x2 - nx*(NODE_RADIUS+4), ey = y2 - ny*(NODE_RADIUS+4);
-    DrawLineEx((Vector2){sx, sy}, (Vector2){ex, ey}, 2.0f, col);
-    float ang = atan2f(ny, nx), h = 12.0f, ha = 0.45f;
-    DrawLineEx((Vector2){ex, ey},
-               (Vector2){ex - h*cosf(ang-ha), ey - h*sinf(ang-ha)}, 2.0f, col);
-    DrawLineEx((Vector2){ex, ey},
-               (Vector2){ex - h*cosf(ang+ha), ey - h*sinf(ang+ha)}, 2.0f, col);
-}
+        sleep_ms(DWELL_MS);               /* dwell 1 s inside the node */
 
-static void drawScene(const Graph *g, const NodePos *pos,
-                      const M5Traveler *tv, int nT) {
-    ClearBackground((Color){ 15,  17,  26, 255});
-    DrawRectangle(WIN_W-240, 0, 240, WIN_H, (Color){20, 22, 34, 255});
+        if (next != -1) {
+            PipeMsg dep = { id, MSG_DEPARTED, node, next };
+            write(writeFd, &dep, sizeof(dep));
 
-    /* edges */
-    for (int u = 0; u < g->numVertices; u++)
-        for (Edge *e = g->adjList[u].head; e; e = e->next) {
-            int v = e->dest;
-            drawArrow(pos[u].x, pos[u].y, pos[v].x, pos[v].y,
-                      (Color){100,110,130,255});
-            float mx = (pos[u].x+pos[v].x)/2.0f;
-            float my = (pos[u].y+pos[v].y)/2.0f;
-            char buf[16]; snprintf(buf, sizeof buf, "%d", e->weight);
-            int tw = MeasureText(buf, 13);
-            DrawText(buf, (int)(mx - tw/2), (int)(my-8), 13,
-                     (Color){170,180,200,255});
+            /* travel time = edge weight * 300ms */
+            int w = 1;
+            Edge *e = g->adjList[node].head;
+            while (e && e->dest != next) e = e->next;
+            if (e) w = e->weight;
+            sleep_ms((long)w * EDGE_MS);   /* travel time = weight * EDGE_MS */
         }
-
-    /* nodes */
-    for (int i = 0; i < g->numVertices; i++) {
-        DrawCircle((int)pos[i].x, (int)pos[i].y, NODE_RADIUS,
-                   (Color){40,44,62,255});
-        DrawCircleLines((int)pos[i].x, (int)pos[i].y, NODE_RADIUS,
-                        (Color){100,110,160,255});
-        char lbl[8]; snprintf(lbl, sizeof lbl, "%d", i);
-        int lw = MeasureText(lbl, 16);
-        DrawText(lbl, (int)(pos[i].x - lw/2), (int)(pos[i].y-8), 16,
-                 (Color){220,225,240,255});
     }
 
-    /* travelers */
-    for (int i = 0; i < nT; i++) {
-        if (!tv[i].started) continue;
-        DrawCircle((int)tv[i].x, (int)tv[i].y, 14, tv[i].color);
-        DrawCircleLines((int)tv[i].x, (int)tv[i].y, 14, WHITE);
-        char lbl[8]; snprintf(lbl, sizeof lbl, "T%d", i);
-        int lw = MeasureText(lbl, 10);
-        DrawText(lbl, (int)tv[i].x - lw/2, (int)tv[i].y - 5, 10, WHITE);
-    }
-
-    /* side panel */
-    int px = WIN_W-228, py = 24;
-    DrawText("DIJKSTRA", px, py, 22, (Color){80,200,120,255});      py += 26;
-    DrawText("IPC - MILESTONE 5", px, py, 14, (Color){170,180,200,255}); py += 24;
-    DrawLine(px, py, WIN_W-12, py, (Color){100,110,160,255});        py += 16;
-
-    for (int i = 0; i < nT; i++) {
-        const char *st = tv[i].done    ? "Done"   :
-                         tv[i].started ? "Moving" : "Waiting";
-        char buf[64];
-        snprintf(buf, sizeof buf, "T%d: %d->%d [%s]",
-                 i, tv[i].src, tv[i].dst, st);
-        DrawText(buf, px, py, 13, tv[i].color);
-        py += 22;
-    }
-
-    py += 8;
-    DrawLine(px, py, WIN_W-12, py, (Color){100,110,160,255}); py += 14;
-    DrawText("IPC: anonymous pipes", px, py, 12, (Color){170,180,200,255}); py += 16;
-    DrawText("Each child computes", px, py, 12, (Color){170,180,200,255}); py += 14;
-    DrawText("Dijkstra independently", px, py, 12, (Color){170,180,200,255});
-
-    char fpsBuf[32]; snprintf(fpsBuf, sizeof fpsBuf, "FPS: %d", GetFPS());
-    DrawText(fpsBuf, WIN_W-228, WIN_H-24, 13, (Color){170,180,200,255});
-}
-#endif /* ENABLE_GUI */
-
-/* ── Process one IPC message (used by both GUI and terminal) ── */
-static void handleMsg(const IPCMsg *msg, M5Traveler *t,
-                      const NodePos *pos, const Graph *g,
-                      int *doneCount, pid_t *pids, int idx) {
-    if (msg->type == MSG_ARRIVED) {
-        int cur = msg->currentNode, nxt = msg->nextNode;
-        if (nxt >= 0)
-            printf("[PID=%d] arrived at node %d | next node: %d\n",
-                   (int)msg->pid, cur, nxt);
-        else
-            printf("[PID=%d] arrived at node %d | DESTINATION\n",
-                   (int)msg->pid, cur);
-        fflush(stdout);
-
-        t->started      = true;
-        t->fromNode     = cur;
-        t->toNode       = nxt;
-        t->animTimer    = 0.0f;
-        t->x            = pos[cur].x;
-        t->y            = pos[cur].y;
-        t->animDuration = (nxt >= 0)
-                          ? (float)edgeWeight(g, cur, nxt) * EDGE_STEP_SEC
-                          : 0.0f;
-    } else { /* MSG_FINISHED */
-        printf("[PID=%d] finished\n", (int)msg->pid);
-        fflush(stdout);
-        t->done   = true;
-        t->toNode = -1;
-        (*doneCount)++;
-        kill(pids[idx], SIGTERM);
-        waitpid(pids[idx], NULL, 0);
-        t->waited = true;
-    }
+    PipeMsg fin = { id, MSG_FINISHED, res->path[res->pathLength - 1], -1 };
+    write(writeFd, &fin, sizeof(fin));
+    printf("[traveler %d | pid %d] finished\n", id, getpid());
+    fflush(stdout);
+    _exit(0);
 }
 
-/* ── main ─────────────────────────────────────────────── */
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <graph_file>\n", argv[0]);
         return EXIT_FAILURE;
     }
 
+    const char *filename = argv[1];
     TravelerReq *travelers = NULL;
     int numTravelers = 0;
-    Graph *g = readGraphFromFile(argv[1], &travelers, &numTravelers);
-    if (!g) return EXIT_FAILURE;
 
-    /* Create one pipe per traveler */
-    int (*pipes)[2] = malloc(sizeof(int[2]) * numTravelers);
-    if (!pipes) { freeGraph(g); free(travelers); return EXIT_FAILURE; }
+    Graph *g = readGraphFromFile(filename, &travelers, &numTravelers);
+    if (g == NULL) return EXIT_FAILURE;
+    if (numTravelers < 1) {
+        fprintf(stderr, "Error: no travelers defined\n");
+        freeGraph(g); free(travelers); return EXIT_FAILURE;
+    }
+
+    DijkstraResult *results = malloc(sizeof(DijkstraResult) * numTravelers);
+    if (!results) { freeGraph(g); free(travelers); return EXIT_FAILURE; }
     for (int i = 0; i < numTravelers; i++)
-        if (pipe(pipes[i]) < 0) { perror("pipe"); exit(EXIT_FAILURE); }
+        results[i] = runDijkstra(g, travelers[i].src, travelers[i].dst);
 
-    pid_t *pids = malloc(sizeof(pid_t) * numTravelers);
-    if (!pids) { freeGraph(g); free(travelers); free(pipes); return EXIT_FAILURE; }
+    /* one pipe per traveler */
+    int (*pipes)[2] = malloc(sizeof(int[2]) * numTravelers);
+    pid_t *pids     = malloc(sizeof(pid_t) * numTravelers);
+    if (!pipes || !pids) { fprintf(stderr,"alloc failed\n"); return EXIT_FAILURE; }
 
-    /* Fork children */
     for (int i = 0; i < numTravelers; i++) {
+        if (pipe(pipes[i]) < 0) { perror("pipe"); exit(EXIT_FAILURE); }
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); exit(EXIT_FAILURE); }
-
-        if (pid == 0) {
-            /* ── Child ── */
-            /* Close all read ends and sibling write ends */
-            for (int j = 0; j < numTravelers; j++) {
-                close(pipes[j][0]);
-                if (j != i) close(pipes[j][1]);
-            }
-            int wfd = pipes[i][1];
-            int src = travelers[i].src;
-            int dst = travelers[i].dst;
-
-            /* Child independently computes its own Dijkstra path */
-            DijkstraResult res = runDijkstra(g, src, dst);
-            IPCMsg msg = { .pid = getpid() };
-
-            if (!res.found || res.pathLength < 1) {
-                msg.type        = MSG_FINISHED;
-                msg.currentNode = src;
-                msg.nextNode    = -1;
-                write(wfd, &msg, sizeof msg);
-            } else {
-                for (int k = 0; k < res.pathLength; k++) {
-                    msg.type        = MSG_ARRIVED;
-                    msg.currentNode = res.path[k];
-                    msg.nextNode    = (k+1 < res.pathLength)
-                                     ? res.path[k+1] : -1;
-                    write(wfd, &msg, sizeof msg);
-
-                    if (k < res.pathLength - 1) {
-                        int w = edgeWeight(g, res.path[k], res.path[k+1]);
-                        usleep((unsigned)w * TRAVEL_USEC_PER_UNIT
-                               + NODE_PAUSE_USEC);
-                    }
-                }
-                msg.type        = MSG_FINISHED;
-                msg.currentNode = res.path[res.pathLength-1];
-                msg.nextNode    = -1;
-                write(wfd, &msg, sizeof msg);
-                freeResult(&res);
-            }
-
-            close(wfd);
-            exit(EXIT_SUCCESS);
+        else if (pid == 0) {
+            /* child: close all other fds, keep its own write end */
+            for (int k = 0; k <= i; k++) close(pipes[k][0]);
+            childRun(i, &results[i], g, pipes[i][1]);
+            _exit(0);
         } else {
             pids[i] = pid;
+            close(pipes[i][1]);                 /* parent reads only */
+            int fl = fcntl(pipes[i][0], F_GETFL, 0);
+            fcntl(pipes[i][0], F_SETFL, fl | O_NONBLOCK);
         }
     }
-
-    /* ── Parent ── */
-    /* Close write ends; set read ends non-blocking */
-    for (int i = 0; i < numTravelers; i++) {
-        close(pipes[i][1]);
-        fcntl(pipes[i][0], F_SETFL, O_NONBLOCK);
-    }
-
-    NodePos *pos = malloc(sizeof(NodePos) * g->numVertices);
-    computePositions(pos, g->numVertices);
-
-    M5Traveler *state = calloc(numTravelers, sizeof(M5Traveler));
-    for (int i = 0; i < numTravelers; i++) {
-        state[i].pid      = pids[i];
-        state[i].src      = travelers[i].src;
-        state[i].dst      = travelers[i].dst;
-        state[i].fromNode = travelers[i].src;
-        state[i].toNode   = -1;
-        state[i].x        = pos[travelers[i].src].x;
-        state[i].y        = pos[travelers[i].src].y;
-#ifdef ENABLE_GUI
-        state[i].color    = PALETTE[i % 10];
-#endif
-    }
-
-    int doneCount = 0;
 
 #ifdef ENABLE_GUI
     SetTraceLogLevel(LOG_WARNING);
     InitWindow(WIN_W, WIN_H, "Dijkstra - Milestone 5 (IPC Pipes)");
     SetTargetFPS(TARGET_FPS);
 
+    VisContext *ctx = visCreate(g, travelers, results, numTravelers);
+    if (!ctx) { CloseWindow(); return EXIT_FAILURE; }
+    ctx->playing = true;          /* animation driven by message timing */
+
+    bool *finished = calloc(numTravelers, sizeof(bool));
+
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
 
-        /* Drain all available messages from each pipe */
+        /* ---- drain pipes, translate IPC -> VisContext state ---- */
         for (int i = 0; i < numTravelers; i++) {
-            if (state[i].done) continue;
-            IPCMsg msg;
-            while (read(pipes[i][0], &msg, sizeof msg) == (ssize_t)sizeof msg) {
-                handleMsg(&msg, &state[i], pos, g, &doneCount, pids, i);
-                if (state[i].done) break;
+            PipeMsg m;
+            ssize_t n;
+            while ((n = read(pipes[i][0], &m, sizeof(m))) == (ssize_t)sizeof(m)) {
+                TravelerState *t = &ctx->travelers[m.traveler];
+                switch (m.type) {
+                    case MSG_ARRIVED:
+                        t->status   = TS_IN_NODE;
+                        t->fromNode = m.node;
+                        /* snap dot onto the node it just reached */
+                        for (int k = 0; k < t->result->pathLength; k++)
+                            if (t->result->path[k] == m.node) { t->pathIdx = k; break; }
+                        t->animState = ANIM_PAUSE_AT_NODE;
+                        t->pauseTimer = 0.0f;
+                        t->entityX = ctx->positions[m.node].x;
+                        t->entityY = ctx->positions[m.node].y;
+                        break;
+                    case MSG_DEPARTED:
+                        t->status    = TS_MOVING;
+                        t->animState = ANIM_MOVE_ON_EDGE;
+                        t->edgeTimer = 0.0f;
+                        { Edge *e = g->adjList[m.node].head;
+                          while (e && e->dest != m.next) e = e->next;
+                          t->totalEdgeSteps = e ? e->weight : 1; }
+                        break;
+                    case MSG_FINISHED:
+                        t->status    = TS_NORMAL;
+                        t->animState = ANIM_DONE;
+                        finished[m.traveler] = true;
+                        break;
+                }
             }
         }
 
-        /* Smooth animation toward next node */
-        for (int i = 0; i < numTravelers; i++) {
-            M5Traveler *t = &state[i];
-            if (!t->started || t->done || t->toNode < 0) continue;
-            t->animTimer += dt;
-            float pct = (t->animDuration > 0.0f)
-                        ? t->animTimer / t->animDuration : 1.0f;
-            if (pct > 1.0f) pct = 1.0f;
-            t->x = pos[t->fromNode].x
-                   + pct * (pos[t->toNode].x - pos[t->fromNode].x);
-            t->y = pos[t->fromNode].y
-                   + pct * (pos[t->toNode].y - pos[t->fromNode].y);
-        }
+        /* the engine does the position math (separation of concerns):
+           the brain above decided WHEN each traveler moves (via IPC);
+           visInterpolate just advances the dot along its current edge. */
+        visInterpolate(ctx, dt);
 
         BeginDrawing();
-            drawScene(g, pos, state, numTravelers);
+            visDraw(ctx);
         EndDrawing();
-
-        if (doneCount >= numTravelers) break;
     }
 
+    visFree(ctx);
     CloseWindow();
-#else
-    /* Terminal-only: poll pipes with short sleep */
-    while (doneCount < numTravelers) {
-        for (int i = 0; i < numTravelers; i++) {
-            if (state[i].done) continue;
-            IPCMsg msg;
-            while (read(pipes[i][0], &msg, sizeof msg) == (ssize_t)sizeof msg) {
-                handleMsg(&msg, &state[i], pos, g, &doneCount, pids, i);
-                if (state[i].done) break;
-            }
-        }
-        usleep(5000);
-    }
+    free(finished);
 #endif
 
-    /* Cleanup */
     for (int i = 0; i < numTravelers; i++) {
+        kill(pids[i], SIGTERM);
+        waitpid(pids[i], NULL, 0);
         close(pipes[i][0]);
-        if (!state[i].waited) {
-            kill(pids[i], SIGTERM);
-            waitpid(pids[i], NULL, 0);
-        }
+        freeResult(&results[i]);
     }
-    free(pos);
-    free(state);
-    free(pids);
-    free(pipes);
-    free(travelers);
-    freeGraph(g);
+    free(pipes); free(pids); free(results);
+    free(travelers); freeGraph(g);
     return EXIT_SUCCESS;
 }

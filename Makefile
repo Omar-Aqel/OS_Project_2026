@@ -40,15 +40,15 @@ milestone4: $(COMMON_SRC) $(SRC_DIR)/main4.c $(SRC_DIR)/visualization.c
 # ─────────────────────────────────────────────
 #  milestone5 — IPC with anonymous pipes
 # ─────────────────────────────────────────────
-milestone5: $(COMMON_SRC) $(SRC_DIR)/main5.c
-	$(CC) $(CFLAGS) -DENABLE_GUI $(COMMON_SRC) $(SRC_DIR)/main5.c -o sim $(RAYLIB_FLAGS)
+milestone5: $(COMMON_SRC) $(SRC_DIR)/main5.c $(SRC_DIR)/visualization.c
+	$(CC) $(CFLAGS) -DENABLE_GUI $(COMMON_SRC) $(SRC_DIR)/main5.c $(SRC_DIR)/visualization.c -o sim $(RAYLIB_FLAGS)
 
 
 # ─────────────────────────────────────────────
 #  milestone6 — Node-access synchronization
 # ─────────────────────────────────────────────
-milestone6: $(COMMON_SRC) $(SRC_DIR)/main6.c
-	$(CC) $(CFLAGS) -DENABLE_GUI $(COMMON_SRC) $(SRC_DIR)/main6.c -o sim $(RAYLIB_FLAGS)
+milestone6: $(COMMON_SRC) $(SRC_DIR)/main6.c $(SRC_DIR)/visualization.c
+	$(CC) $(CFLAGS) -DENABLE_GUI $(COMMON_SRC) $(SRC_DIR)/main6.c $(SRC_DIR)/visualization.c -o sim $(RAYLIB_FLAGS)
 
 
 # ─────────────────────────────────────────────
