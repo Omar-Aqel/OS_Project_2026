@@ -1,18 +1,6 @@
 /* ================================================================== *
  *  Milestone 5 — IPC with anonymous pipes
- *  --------------------------------------------------------------
- *  THE BRAIN.  This file owns ALL operating-system logic:
- *    - fork() one child per traveler,
- *    - each child computes its OWN Dijkstra path,
- *    - each child walks the path, sleeping weight*300ms per edge and
- *      1000ms inside each node, reporting every step to the parent
- *      through an anonymous pipe,
- *    - the parent reads those messages (non-blocking) and translates
- *      them into VisContext state.
- *
- *  It contains NO drawing code beyond the 3-line render call.  All
- *  rendering lives in the unified visualization.c engine.
- * ================================================================== */
+* ================================================================== */
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>

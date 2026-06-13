@@ -1,20 +1,5 @@
 /* ================================================================== *
  *  Milestone 6 — Node-access synchronization
- *  --------------------------------------------------------------
- *  THE BRAIN (everything OS-level lives here, exclusively):
- *    - fork() one child per traveler; each computes its OWN path,
- *    - a shared array of POSIX semaphores (one per node), created in
- *      shared memory via mmap, each initialised to 1,
- *    - CRITICAL SECTION = a node.  Before entering a node a child does
- *      sem_wait(); it dwells 1 s inside; then sem_post() and only THEN
- *      travels to the next node.  Releasing BEFORE travelling means a
- *      traveler never holds two node-locks at once -> no deadlock.
- *    - the absolute rule "one traveler per node" applies to EVERY node
- *      including each traveler's destination (decision (b)).
- *    - protocol adds MSG_WAITING so the parent can show travelers that
- *      are blocked OUTSIDE a node.
- *
- *  No drawing logic here beyond the unified 3-line render call.
  * ================================================================== */
 #include <stdio.h>
 #include <stdlib.h>
