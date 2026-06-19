@@ -152,3 +152,22 @@ and enter one-by-one.
 1 4
 2 3
 ```
+---
+
+### Milestone 7 — Scheduling Algorithms (FCFS vs SJF)
+In this final milestone, we replaced the OS-level semaphore locking with a custom user-space scheduler managed by the Parent process. When multiple travelers request access to a critical section (a node), the Parent places them in a "Wait Queue" and uses IPC (Wake-up Pipes) to grant access based on the chosen scheduling algorithm:
+
+* **FCFS (First Come First Serve):** The traveler who arrived and sent the `MSG_WAITING` first is granted access first, functioning as a standard FIFO queue.
+* **SJF (Shortest Job First):** The parent scans the wait queue and grants access to the traveler with the lowest total path weight, allowing shorter journeys to bypass longer ones.
+
+#### The Demo File (`graph7.txt`)
+To clearly demonstrate the difference between the two algorithms, we created a specific test case in `graph7.txt` where three travelers meet at Node 3 with varying total path weights:
+- **T0:** Total weight = 25
+- **T1:** Total weight = 15
+- **T2:** Total weight = 7
+
+**Usage:**
+```bash
+make milestone7
+./sim-schd fcfs graph7.txt
+./sim-schd sjf graph7.txt
