@@ -29,7 +29,7 @@ typedef struct {
 } PipeMsg;
 
 
-#define EDGE_MS  1200    
+#define EDGE_MS  600    
 #define DWELL_MS 1000
 
 typedef enum { ALGO_FCFS, ALGO_SJF } SchedAlgo;
@@ -183,9 +183,12 @@ int main(int argc, char *argv[]) {
     VisContext *ctx = visCreate(g, travelers, results, numTravelers);
     ctx->playing = true;
 
-    while (!WindowShouldClose()) {
+   while (!WindowShouldClose()) {
         float dt = GetFrameTime();
 
+        // ==========================================
+        // Phase 1: Read all incoming messages first (Batching)
+        // ==========================================
         for (int i = 0; i < numTravelers; i++) {
             PipeMsg m;
             while (read(pipes[i][0], &m, sizeof(m)) == (ssize_t)sizeof(m)) {
@@ -195,28 +198,14 @@ int main(int argc, char *argv[]) {
                 switch (m.type) {
                     case MSG_WAITING:
                         t->status = TS_WAITING; t->waitNode = node; t->fromNode = m.from;
-                        // Put traveler in the queue for this node
+                        // Place the traveler in the queue only; do not grant the node immediately!
                         waitQueues[node][qSize[node]++] = m.traveler;
-                        
-                        // If node is free, immediately grant access
-                        if (!nodeOccupied[node]) {
-                            nodeOccupied[node] = true;
-                            int bestIdx = pickNextTraveler(waitQueues[node], qSize[node], algo, results);
-                            int luckyTraveler = waitQueues[node][bestIdx];
-                            
-                            // Remove luckyTraveler from queue
-                            for (int k = bestIdx; k < qSize[node]-1; k++) 
-                                waitQueues[node][k] = waitQueues[node][k+1];
-                            qSize[node]--;
-
-                            // Wake up the child
-                            write(wakePipes[luckyTraveler][1], "G", 1);
-                        }
                         break;
 
                     case MSG_ARRIVED:
                         t->status = TS_IN_NODE; t->waitNode = -1; t->fromNode = node;
                         ctx->nodeOccupied[node] = true;
+                        nodeOccupied[node] = true; // Confirm node occupancy
                         for (int k = 0; k < t->result->pathLength; k++)
                             if (t->result->path[k] == node) { t->pathIdx = k; break; }
                         t->animState = ANIM_PAUSE_AT_NODE; t->pauseTimer = 0.0f;
@@ -233,25 +222,36 @@ int main(int argc, char *argv[]) {
                         } else {
                             t->status = TS_NORMAL; t->animState = ANIM_DONE;
                         }
-
-                        // The node is now free. Is anyone waiting?
-                        if (qSize[node] > 0) {
-                            int bestIdx = pickNextTraveler(waitQueues[node], qSize[node], algo, results);
-                            int luckyTraveler = waitQueues[node][bestIdx];
-                            
-                            for (int k = bestIdx; k < qSize[node]-1; k++) 
-                                waitQueues[node][k] = waitQueues[node][k+1];
-                            qSize[node]--;
-
-                            write(wakePipes[luckyTraveler][1], "G", 1);
-                        } else {
-                            nodeOccupied[node] = false;
-                            ctx->nodeOccupied[node] = false;
-                        }
+                        // Clear node occupancy only
+                        nodeOccupied[node] = false;
+                        ctx->nodeOccupied[node] = false;
                         break;
                 }
             }
         }
+
+        // ==========================================
+        // Phase 2: Schedule and wake up the winner (Scheduling)
+        // ==========================================
+        for (int node = 0; node < N; node++) {
+            // If the node is free and there are travelers in its queue
+            if (!nodeOccupied[node] && qSize[node] > 0) {
+                nodeOccupied[node] = true; // Reserve it immediately for the winner
+                
+                // Apply the algorithm (SJF or FCFS) to pick the best from the queue
+                int bestIdx = pickNextTraveler(waitQueues[node], qSize[node], algo, results);
+                int luckyTraveler = waitQueues[node][bestIdx];
+                
+                // Remove the winner from the queue
+                for (int k = bestIdx; k < qSize[node]-1; k++) 
+                    waitQueues[node][k] = waitQueues[node][k+1];
+                qSize[node]--;
+
+                // Send the wake-up signal to the winner
+                write(wakePipes[luckyTraveler][1], "G", 1);
+            }
+        }
+
         visInterpolate(ctx, dt);
         BeginDrawing(); visDraw(ctx); EndDrawing();
     }
