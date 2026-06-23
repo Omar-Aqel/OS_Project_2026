@@ -288,3 +288,4 @@ make clean
 ```
 
 Removes the `dijkstra`, `sim`, and `sim-schd` executables.
+Removes the `dijkstra`, `sim`, and `sim-schd` executables.
