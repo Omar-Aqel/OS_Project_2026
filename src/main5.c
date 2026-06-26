@@ -28,7 +28,7 @@ typedef struct {
     int     next;       /* next node (or -1)               */
 } PipeMsg;
 
-#define EDGE_MS  900     /* ms per weight unit, matches renderer  */
+#define EDGE_MS  900     /* ms per weight unit, matches renderer */
 #define DWELL_MS 1000    /* ms dwell inside a node                */
 
 /* Sleep for an arbitrary number of milliseconds.  usleep() is unsafe
