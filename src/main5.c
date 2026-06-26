@@ -19,7 +19,7 @@
 #endif
 
 /* ---- pipe message protocol (milestone 5) ------------------------- */
-typedef enum { MSG_ARRIVED, MSG_DEPARTED, MSG_FINISHED } MsgType;
+typedef enum { MSG_ARRIVED, MSG_DEPARTED, MSG_FINISHED, MSG_NO_PATH } MsgType;
 
 typedef struct {
     int     traveler;   /* which traveler                 */
@@ -48,7 +48,7 @@ static void sleep_ms(long ms) {
 static void childRun(int id, const DijkstraResult *res,
                      const Graph *g, int writeFd) {
     if (!res->found || res->pathLength < 1) {
-        PipeMsg m = { id, MSG_FINISHED, -1, -1 };
+        PipeMsg m = { id, MSG_NO_PATH, -1, -1 }; // edit add : MSG_NO_PATH
         write(writeFd, &m, sizeof(m));
         _exit(0);
     }
@@ -168,6 +168,12 @@ int main(int argc, char *argv[]) {
                         { Edge *e = g->adjList[m.node].head;
                           while (e && e->dest != m.next) e = e->next;
                           t->totalEdgeSteps = e ? e->weight : 1; }
+                        break;
+                        case MSG_NO_PATH:
+                        printf("[Parent Alert] Traveler %d has NO PATH to destination!\n", m.traveler);
+                        t->status    = TS_NORMAL;
+                        t->animState = ANIM_DONE;
+                        finished[m.traveler] = true;
                         break;
                     case MSG_FINISHED:
                         t->status    = TS_NORMAL;
