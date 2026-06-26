@@ -183,7 +183,7 @@ int main(int argc, char *argv[]) {
     VisContext *ctx = visCreate(g, travelers, results, numTravelers);
     ctx->playing = true;
 
-   while (!WindowShouldClose()) {
+  while (!WindowShouldClose()) {
         float dt = GetFrameTime();
 
         // ==========================================
@@ -241,10 +241,36 @@ int main(int argc, char *argv[]) {
                 // Apply the algorithm (SJF or FCFS) to pick the best from the queue
                 int bestIdx = pickNextTraveler(waitQueues[node], qSize[node], algo, results);
                 int luckyTraveler = waitQueues[node][bestIdx];
+
+                printf("\n--- Scheduler Decision for Node %d ---\n", node);
                 
-                // Remove the winner from the queue
-                for (int k = bestIdx; k < qSize[node]-1; k++) 
+                // 1. מי ממתין? (whos waiting؟)
+                printf("Waiting travelers in queue: ");
+                for(int k = 0; k < qSize[node]; k++) {
+                    int t_id = waitQueues[node][k];
+                    if (algo == ALGO_SJF) {
+                        printf("[ID: %d, Weight: %d] ", t_id, results[t_id].totalWeight);
+                    } else {
+                        printf("[ID: %d] ", t_id);
+                    }
+                }
+                printf("\n");
+
+                // 2. מי נבחר ולמה? (who did we chose and why ?)
+                if (algo == ALGO_FCFS) {
+                    printf("Chosen: Traveler %d\n", luckyTraveler);
+                    printf("Reason: FCFS (First-Come, First-Served) - Arrived first in the queue.\n");
+                } else {
+                    printf("Chosen: Traveler %d\n", luckyTraveler);
+                    printf("Reason: SJF (Shortest Job First) - Has the minimum total path weight (%d).\n", results[luckyTraveler].totalWeight);
+                }
+                printf("--------------------------------------\n");
+                fflush(stdout);
+
+                // Remove the winner from the queue 
+                for (int k = bestIdx; k < qSize[node]-1; k++) {
                     waitQueues[node][k] = waitQueues[node][k+1];
+                }
                 qSize[node]--;
 
                 // Send the wake-up signal to the winner
